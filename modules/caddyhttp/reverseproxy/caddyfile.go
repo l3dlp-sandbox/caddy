@@ -16,6 +16,7 @@ package reverseproxy
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	"github.com/caddyserver/caddy/v2/internal"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/headers"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/rewrite"
@@ -79,6 +81,7 @@ func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 //	    health_headers {
 //	        <field> [<values...>]
 //	    }
+//	    health_method   <value>
 //
 //	    # passive health checking
 //	    fail_duration     <duration>
@@ -353,6 +356,26 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			h.HealthChecks.Active.Path = d.Val()
 			caddy.Log().Named("config.adapter.caddyfile").Warn("the 'health_path' subdirective is deprecated, please use 'health_uri' instead!")
 
+		case "health_upstream":
+			if !d.NextArg() {
+				return d.ArgErr()
+			}
+			if h.HealthChecks == nil {
+				h.HealthChecks = new(HealthChecks)
+			}
+			if h.HealthChecks.Active == nil {
+				h.HealthChecks.Active = new(ActiveHealthChecks)
+			}
+			_, port, err := net.SplitHostPort(d.Val())
+			if err != nil {
+				return d.Errf("health_upstream is malformed '%s': %v", d.Val(), err)
+			}
+			_, err = strconv.Atoi(port)
+			if err != nil {
+				return d.Errf("bad port number '%s': %v", d.Val(), err)
+			}
+			h.HealthChecks.Active.Upstream = d.Val()
+
 		case "health_port":
 			if !d.NextArg() {
 				return d.ArgErr()
@@ -362,6 +385,9 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 			if h.HealthChecks.Active == nil {
 				h.HealthChecks.Active = new(ActiveHealthChecks)
+			}
+			if h.HealthChecks.Active.Upstream != "" {
+				return d.Errf("the 'health_port' subdirective is ignored if 'health_upstream' is used!")
 			}
 			portNum, err := strconv.Atoi(d.Val())
 			if err != nil {
@@ -386,6 +412,18 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				h.HealthChecks.Active = new(ActiveHealthChecks)
 			}
 			h.HealthChecks.Active.Headers = healthHeaders
+
+		case "health_method":
+			if !d.NextArg() {
+				return d.ArgErr()
+			}
+			if h.HealthChecks == nil {
+				h.HealthChecks = new(HealthChecks)
+			}
+			if h.HealthChecks.Active == nil {
+				h.HealthChecks.Active = new(ActiveHealthChecks)
+			}
+			h.HealthChecks.Active.Method = d.Val()
 
 		case "health_interval":
 			if !d.NextArg() {
@@ -651,7 +689,7 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		case "trusted_proxies":
 			for d.NextArg() {
 				if d.Val() == "private_ranges" {
-					h.TrustedProxies = append(h.TrustedProxies, caddyhttp.PrivateRangesCIDR()...)
+					h.TrustedProxies = append(h.TrustedProxies, internal.PrivateRangesCIDR()...)
 					continue
 				}
 				h.TrustedProxies = append(h.TrustedProxies, d.Val())
